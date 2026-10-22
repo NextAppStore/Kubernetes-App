@@ -1,0 +1,24 @@
+# Kopieren nach terraform.tfvars (steht in .gitignore) und anpassen.
+# Der Worker der Plattform injiziert users und image_name normalerweise selbst.
+
+# Ein Kurs = ein Team = eine VM mit einem k3s-Cluster.
+users = {
+  kurs = [
+    { email = "anna.mueller@example.com" },
+    { email = "ben.schmidt@example.com" },
+    { email = "carla.meier@example.com" },
+  ]
+}
+
+image_name  = "kubernetes-app-v0.1.0"
+flavor_name = "gp1.large"
+
+# Optional: SSH-Zugang zur VM (Benutzer ubuntu) fuer Fehlersuche.
+# key_pair_name = "erik-dev"
+
+# Optional: groessere Platte fuer die Home-Verzeichnisse.
+# root_disk_gb = 100
+
+# Netze, die SSH und die API erreichen duerfen (Campus/VPN).
+# allowed_cidr_v4 = "141.72.0.0/16"
+# allowed_cidr_v6 = "2001:7c0::/32"

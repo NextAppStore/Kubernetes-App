@@ -1,0 +1,21 @@
+# Terraform files
+.terraform/
+docs/
+tests/
+check.sh
+*.tfstate
+*.tfstate.*
+.terraform.lock.hcl
+terraform.tfvars
+
+# Packer files
+packer_cache/
+*.box
+*.pkrvars.hcl
+
+# Zugangsdaten: nie einchecken
+*.kubeconfig
+clouds.yaml
+
+# OS files
+.DS_Store
