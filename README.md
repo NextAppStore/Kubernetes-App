@@ -25,7 +25,6 @@ Dozent    kubectl --kubeconfig kurs.kubeconfig  →  https://[<IPv6>]:6443  (clu
 | `packer/` | Image: k3s, Student-Image (als Tar importiert, keine Registry), `labctl` |
 | `packer/files/labctl` | CLI für den Dozenten |
 | `packer/files/student-image/` | Dockerfile und Entrypoint des Student-Pods |
-| `tests/`, `check.sh` | Tests ohne OpenStack/Cluster |
 
 ## 1. Image bauen (Packer)
 
@@ -117,7 +116,7 @@ Home-Verzeichnisse gingen verloren). Dafür gibt es `labctl add-student`.
 
 ## Bekannte Unsicherheiten (beim ersten Deploy prüfen)
 
-Folgendes ist statisch geprüft (`check.sh`), aber **noch nicht gegen ein echtes OpenStack/k3s getestet**:
+Folgendes ist statisch geprüft, aber **noch nicht gegen ein echtes OpenStack/k3s getestet**:
 
 1. **Eigene Server-CA und Token-Auth in k3s**: Akzeptiert k3s `server-ca.crt/key` ohne weitere CA-Dateien, und
    funktioniert `token-auth-file`? Fehlerbild: `kubectl` meldet Zertifikats- oder `Unauthorized`-Fehler.
@@ -128,14 +127,3 @@ Folgendes ist statisch geprüft (`check.sh`), aber **noch nicht gegen ein echtes
 3. **DHCPv6 in der VM**: Laut Entwicklerguide reicht für Linux das Netz `DHBWV6`. Bei Problemen die Adresse per
    netplan setzen.
 4. **Packer-Build**: Docker-Installation und `docker save` im Build, Import des Tars durch k3s.
-
-## Tests ohne OpenStack
-
-```bash
-# aus dem Projektroot (Sandbox, siehe CLAUDE.md)
-python3 agentic-harness/sandbox.py bash Kubernetes-App/check.sh
-```
-
-Prüft `terraform fmt/validate`, `shellcheck`, das Rendern der cloud-init-Vorlage (mit und ohne IPv6),
-die Ableitung der Benutzernamen und Ports und die von `labctl` erzeugten Manifeste (mit Fake-`kubectl`).
-`tflint`, `tfsec` und `packer validate` laufen nicht in der Sandbox und müssen lokal gestartet werden.
