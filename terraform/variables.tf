@@ -74,6 +74,12 @@ variable "allowed_cidr_v6" {
   }
 }
 
+variable "allow_pod_communication" {
+  description = "Pentest-Modus: Die Student-Pods eines Teams erreichen sich gegenseitig auf allen Ports. Die Pods erreichen dann das DHBW-/OpenStack-Netz (allowed_cidr_v4/v6) nicht mehr. Spaeter umschaltbar mit `labctl network open|isolated`."
+  type        = bool
+  default     = false
+}
+
 ############################
 # Pod-Ressourcen je Student
 ############################

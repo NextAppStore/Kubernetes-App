@@ -86,9 +86,27 @@ Oder auf der VM: `sudo labctl list` (bei gesetztem `key_pair_name`).
 | `labctl add-student <user> [passwort] [port]` | Student nachträglich anlegen |
 | `labctl remove-student <user> [--yes]` | Student samt Daten entfernen |
 | `labctl shell <user>` / `labctl logs <user>` | Support |
+| `labctl network <open\|isolated\|status>` | Pentest-Modus ein-/ausschalten oder anzeigen (siehe unten) |
 
 Neue Studenten werden **nicht** über Terraform nachgezogen (die VM würde sonst ersetzt und alle
 Home-Verzeichnisse gingen verloren). Dafür gibt es `labctl add-student`.
+
+### Pentest-Modus (Pod-zu-Pod-Kommunikation)
+
+Mit `allow_pod_communication = true` (Schalter im Wizard) erreichen sich die Student-Pods eines Teams
+gegenseitig auf allen Ports und Protokollen, z.B. um gegenseitig die eigenen Anwendungen anzugreifen.
+Jeder Pod ist unter `<user>.students.lab.svc.cluster.local` erreichbar. Der Name bleibt bei `reassign`
+gleich, obwohl sich die Pod-IP ändert.
+
+* Die Variable setzt nur den Startwert. Danach schaltet `labctl network open|isolated` sofort um,
+  ohne Pod-Neustart. Der Modus steht als Label `kubernetes-app/peer-access` am Namespace `lab`.
+* Im Pentest-Modus erreichen die Pods das DHBW-/OpenStack-Netz (`allowed_cidr_v4`/`allowed_cidr_v6`)
+  nicht mehr, also weder andere VMs noch die Pods anderer Teams. Das Internet (apt, pip, git) bleibt
+  erreichbar. Knoten, Kubernetes-API und Metadatendienst bleiben in beiden Modi gesperrt.
+* `NET_RAW` bleibt entfernt, damit niemand per ARP-Spoofing den Verkehr anderer Pods mitschneidet.
+  Port-Scans deshalb als Connect-Scan: `nmap -sT` statt `-sS`.
+* Pods, die vor dieser Version angelegt wurden, haben noch keinen DNS-Namen. Sie sind per Pod-IP
+  erreichbar; nach `labctl reset` oder Neuanlage haben sie einen Namen.
 
 ## 5. Abnahme-Checkliste
 
@@ -98,7 +116,11 @@ Home-Verzeichnisse gingen verloren). Dafür gibt es `labctl add-student`.
 4. `labctl reset anna` → Datei weg, SSH geht wieder (neuer Host-Key: `ssh-keygen -R`).
 5. Isolation im Pod von `anna`: `curl -m3 http://169.254.169.254` schlägt fehl, `nc -zv <ip-der-VM> 6443` schlägt fehl, ein anderer Student-Pod ist nicht erreichbar, es gibt kein Token unter `/var/run/secrets`.
 6. Last: `:(){ :|:& };:` im Pod → andere Pods und `kubectl get nodes` bleiben erreichbar (PID-Limit 512).
-7. `labctl add-student carl`; zum Schluss `terraform destroy`.
+7. Pentest-Modus: `labctl network open`. Im Pod von `ben` `python3 -m http.server 8080`, aus dem Pod von
+   `anna` `curl -m3 ben.students.lab.svc.cluster.local:8080` geht. Eine andere VM im Campusnetz und die
+   NodePorts anderer Teams sind nicht erreichbar, `curl https://example.org` geht, SSH von außen geht weiter.
+   `labctl network isolated` → der curl zwischen den Pods schlägt sofort fehl.
+8. `labctl add-student carl`; zum Schluss `terraform destroy`.
 
 ## Sicherheitshinweise
 
@@ -107,6 +129,8 @@ Home-Verzeichnisse gingen verloren). Dafür gibt es `labctl add-student`.
   wäre ein Weg heraus. Alle Pods teilen sich den Kernel der VM.
 * **Isolation**: NetworkPolicy sperrt Pod↔Pod, Zugriffe auf die Kubernetes-API, die VM selbst und den
   OpenStack-Metadatendienst `169.254.169.254` (dort liegen die `user_data` mit Passwörtern und Admin-Token).
+  Im Pentest-Modus ist Pod↔Pod innerhalb des Teams offen, dafür ist das DHBW-/OpenStack-Netz gesperrt.
+  Ohne Pentest-Modus erreichen Pods das Campusnetz, und damit auch andere VMs.
 * **Kubeconfig** enthält einen statischen cluster-admin-Token. Der Token und die CA liegen im Terraform-State und
   in den `user_data` der VM.
 * **Speicher**: `local-path` erzwingt die Größe des Home-Verzeichnisses nicht. Die Platte der VM ist die Grenze

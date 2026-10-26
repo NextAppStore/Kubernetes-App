@@ -20,6 +20,9 @@ write_files:
       POD_MEMORY_LIMIT=${pod_memory_limit}
       POD_MEMORY_REQUEST=${pod_memory_request}
       POD_DISK=${pod_disk}
+      POD_TO_POD=${pod_to_pod}
+      CAMPUS_CIDR_V4=${campus_cidr_v4}
+      CAMPUS_CIDR_V6=${campus_cidr_v6}
 
   # Startliste: Benutzer, Passwort, NodePort. Wird nur von `labctl sync` gelesen.
   - path: /etc/kubernetes-app/students.tsv

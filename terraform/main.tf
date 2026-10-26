@@ -211,6 +211,9 @@ resource "openstack_compute_instance_v2" "team_vm" {
     pod_memory_limit   = var.pod_memory_limit
     pod_memory_request = var.pod_memory_request
     pod_disk           = var.pod_disk
+    pod_to_pod         = var.allow_pod_communication
+    campus_cidr_v4     = var.allowed_cidr_v4
+    campus_cidr_v6     = var.allowed_cidr_v6
     students = [
       for uid in local.team_user_ids[each.key] : {
         username = local.users_map[uid].username

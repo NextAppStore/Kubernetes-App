@@ -22,3 +22,6 @@ flavor_name = "gp1.large"
 # Netze, die SSH und die API erreichen duerfen (Campus/VPN).
 # allowed_cidr_v4 = "141.72.0.0/16"
 # allowed_cidr_v6 = "2001:7c0::/32"
+
+# Pentest-Modus: Student-Pods erreichen sich gegenseitig (spaeter: labctl network).
+# allow_pod_communication = true

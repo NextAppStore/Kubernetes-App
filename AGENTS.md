@@ -15,8 +15,12 @@ inside it. The platform obligations (variables `users`/`image_name`, outputs
 * **Logic lives in the image, data lives in cloud-init.** Scripts (`labctl`, provisioning) live
   under `packer/files/` and are installed into the image. `user-data.yaml.tpl` holds only
   configuration.
-* **Students must never reach the metadata service, the API, or other pods.** The NetworkPolicy
-  in `labctl` blocks these targets; any change to it must be covered in `tests/labctl.sh`.
+* **Students must never reach the metadata service, the API, or the node.** Other pods are blocked
+  unless pentest mode is on (namespace label `kubernetes-app/peer-access=open`, initial value from
+  `allow_pod_communication`). Then the additive policy `student-peer-access` opens student↔student
+  traffic only, and `student-isolation` additionally blocks the campus/OpenStack networks so attacks
+  cannot leave the team's pods. The namespace label, not `lab.env`, is the source of truth after
+  first boot. Any change to these policies must be covered in `tests/labctl.sh`.
 * **Usernames are DNS labels** (`^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$`) and must match between
   `main.tf` and `labctl`.
 * `LAB_IMAGE` (`labctl`, `main.tf`) and `student_image` (Packer) must use the same name and tag.

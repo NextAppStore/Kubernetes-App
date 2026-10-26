@@ -27,6 +27,11 @@ CLUSTER_CIDR_V4="10.42.0.0/16"
 CLUSTER_CIDR_V6="fd00:42::/56"
 SERVICE_CIDR_V4="10.43.0.0/16"
 SERVICE_CIDR_V6="fd00:43::/112"
+# Startwert fuer den Pentest-Modus. Danach gilt das Label am Namespace.
+POD_TO_POD="false"
+CAMPUS_CIDR_V4="141.72.0.0/16"
+CAMPUS_CIDR_V6="2001:7c0::/32"
+PEER_LABEL="kubernetes-app/peer-access"
 
 if [ -r "${LAB_ENV_FILE}" ]; then
     # shellcheck disable=SC1090
@@ -56,6 +61,7 @@ Verwendung: labctl <befehl> [argumente]
   add-student <user> [passwort] [port]
   remove-student <user> [--yes]  Pod, Service, Secret und Home loeschen
   sync                           Studenten aus /etc/kubernetes-app/students.tsv anlegen
+  network <open|isolated|status> Pentest-Modus: Pods erreichen sich gegenseitig (open)
   shell <user>                   Shell im Pod des Studenten oeffnen
   logs <user>                    Logs des Pods anzeigen
 EOF
@@ -89,12 +95,31 @@ generation_of() {
         -o jsonpath='{.spec.template.metadata.annotations.lab-generation}' 2>/dev/null || true
 }
 
+# Das Label am Namespace ist massgeblich, damit add-student und sync einen
+# umgeschalteten Modus nicht auf den Startwert aus lab.env zuruecksetzen.
+peer_mode() {
+    local mode
+    mode="$(kc get namespace "${NAMESPACE}" -o jsonpath="{.metadata.labels.${PEER_LABEL}}" 2>/dev/null || true)"
+    case "${mode}" in
+        open | isolated) echo "${mode}" ;;
+        *) if [ "${POD_TO_POD}" = "true" ]; then echo open; else echo isolated; fi ;;
+    esac
+}
+
 # --- Manifeste ---------------------------------------------------------------
 
 apply_namespace_and_policy() {
-    local node4 node6 ip except4 except6
+    local mode="${1:-}" node4 node6 ip except4 except6
+    [ -n "${mode}" ] || mode="$(peer_mode)"
     except4="\"${CLUSTER_CIDR_V4}\", \"${SERVICE_CIDR_V4}\", \"169.254.0.0/16\""
     except6="\"${CLUSTER_CIDR_V6}\", \"${SERVICE_CIDR_V6}\", \"fe80::/10\""
+    # Im Pentest-Modus duerfen Angriffe nur die eigenen Pods treffen: Pod-Verkehr
+    # wird per NAT mit der oeffentlichen VM-IP gesendet und erreicht sonst andere
+    # VMs und die NodePorts anderer Teams.
+    if [ "${mode}" = "open" ]; then
+        except4="${except4}, \"${CAMPUS_CIDR_V4}\""
+        except6="${except6}, \"${CAMPUS_CIDR_V6}\""
+    fi
     while read -r ip; do
         [ -n "${ip}" ] || continue
         if [[ "${ip}" == *:* ]]; then
@@ -114,6 +139,20 @@ apiVersion: v1
 kind: Namespace
 metadata:
   name: ${NAMESPACE}
+  labels:
+    ${PEER_LABEL}: ${mode}
+---
+# DNS-Namen <user>.students.${NAMESPACE}.svc.cluster.local fuer alle Ports.
+apiVersion: v1
+kind: Service
+metadata:
+  name: students
+  namespace: ${NAMESPACE}
+spec:
+  clusterIP: None
+  ipFamilyPolicy: PreferDualStack
+  selector:
+    role: student
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -159,6 +198,37 @@ spec:
             cidr: ::/0
             except: [${except6}]
 EOF
+
+    # NetworkPolicies sind additiv: diese zweite Policy oeffnet nur den Verkehr
+    # zwischen Student-Pods, alle Sperren von student-isolation bleiben.
+    if [ "${mode}" = "open" ]; then
+        kc apply -f - <<EOF
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: student-peer-access
+  namespace: ${NAMESPACE}
+spec:
+  podSelector:
+    matchLabels:
+      role: student
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              role: student
+  egress:
+    - to:
+        - podSelector:
+            matchLabels:
+              role: student
+EOF
+    else
+        kn delete networkpolicy student-peer-access --ignore-not-found
+    fi
 }
 
 apply_pvc() {
@@ -217,6 +287,8 @@ spec:
       annotations:
         lab-generation: "${generation}"
     spec:
+      hostname: ${user}
+      subdomain: students
       automountServiceAccountToken: false
       enableServiceLinks: false
       terminationGracePeriodSeconds: 5
@@ -441,6 +513,18 @@ cmd_sync() {
     done <"${STUDENTS_FILE}"
 }
 
+cmd_network() {
+    local mode="${1:-status}"
+    case "${mode}" in
+        open | isolated)
+            apply_namespace_and_policy "${mode}"
+            echo "Pod-zu-Pod-Kommunikation: ${mode}"
+            ;;
+        status) echo "Pod-zu-Pod-Kommunikation: $(peer_mode)" ;;
+        *) die "Verwendung: labctl network <open|isolated|status>" ;;
+    esac
+}
+
 cmd_shell() {
     local user="${1:-}"
     [ -n "${user}" ] || die "Verwendung: labctl shell <user>"
@@ -470,6 +554,7 @@ main() {
         add-student) cmd_add_student "$@" ;;
         remove-student) cmd_remove_student "$@" ;;
         sync) cmd_sync "$@" ;;
+        network) cmd_network "$@" ;;
         shell) cmd_shell "$@" ;;
         logs) cmd_logs "$@" ;;
         -h | --help | help) usage ;;
