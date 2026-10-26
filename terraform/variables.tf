@@ -1,5 +1,5 @@
 ############################
-# Plattform-injizierte Variablen (nicht im Wizard sichtbar)
+# Platform-injected variables (not visible in the wizard)
 ############################
 
 variable "users" {
@@ -17,14 +17,14 @@ variable "image_name" {
 }
 
 ############################
-# Wizard-Variablen (vom Deployer im AppStore konfiguriert)
+# Wizard variables (configured by the deployer in the AppStore)
 ############################
 
 variable "network_uuid" {
   description = "UUID des internen Netzwerks @openstack:network:id"
   type        = string
-  # DHBWV6: dual-stack (v4+v6 auf demselben Subnetz-Paar) — jede VM
-  # bekommt automatisch beide Fixed-IPs von Neutron.
+  # DHBWV6: dual-stack (v4+v6 on the same subnet pair) — every VM
+  # automatically gets both fixed IPs from Neutron.
   default = "9b579624-d844-4df3-b38d-89978b31d37d"
 }
 
@@ -81,7 +81,7 @@ variable "allow_pod_communication" {
 }
 
 ############################
-# Pod-Ressourcen je Student
+# Pod resources per student
 ############################
 
 variable "pod_cpu_limit" {

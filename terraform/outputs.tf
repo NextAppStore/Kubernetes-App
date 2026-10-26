@@ -6,10 +6,10 @@
 # "<team>-<username>": {
 #   type        = "password"
 #   ip          = "141.72.x.y"        # IPv4
-#   ip_v6       = "2001:7c0:..."      # IPv6 (Hauptadresse)
-#   port        = 30001               # NodePort des Student-Pods
+#   ip_v6       = "2001:7c0:..."      # IPv6 (primary address)
+#   port        = 30001               # NodePort of the student pod
 #   username    = "anna"
-#   auth        = "<passwort>"
+#   auth        = "<password>"
 #   ssh_command = "ssh -p 30001 anna@2001:7c0:..."
 # }
 
@@ -32,8 +32,8 @@ output "team_vms" {
       fixed_ip      = local.fixed_ip_v4[team]
       fixed_ip_v6   = local.fixed_ip_v6[team]
       floating_ip   = null
-      # Die API-Adresse dient als Link; die SSH-Befehle stehen je Student in
-      # user_accounts.
+      # The API address serves as the link; the SSH commands are listed per
+      # student in user_accounts.
       url          = local.api_endpoint[team]
       api_endpoint = local.api_endpoint[team]
       ssh_command  = var.key_pair_name != "" ? "ssh ubuntu@${local.primary_ip[team]}" : null
@@ -49,10 +49,10 @@ output "teams_summary" {
 }
 
 ############################
-# Kubeconfig fuer Dozenten
+# Kubeconfig for lecturers
 ############################
 
-# Admin-Zugang (cluster-admin) je Team. Speichern mit:
+# Admin access (cluster-admin) per team. Save with:
 #   terraform output -json kubeconfigs | jq -r '.["<team>"]' > kurs.kubeconfig
 output "kubeconfigs" {
   description = "Kubeconfig mit Admin-Rechten je Team (nur fuer Dozenten)"

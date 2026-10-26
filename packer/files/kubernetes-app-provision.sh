@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # shellcheck disable=SC2153
-# Erststart der VM: k3s starten, auf den Knoten warten, Studenten anlegen.
+# First boot of the VM: start k3s, wait for the node, create the students.
 #
-# Wird von cloud-init (runcmd) aufgerufen. Die Konfiguration schreibt cloud-init
-# vorher nach /etc/kubernetes-app/ und /etc/rancher/k3s/.
+# Called by cloud-init (runcmd). cloud-init writes the configuration
+# beforehand to /etc/kubernetes-app/ and /etc/rancher/k3s/.
 set -euo pipefail
 
 LAB_ENV_FILE=/etc/kubernetes-app/lab.env
@@ -12,8 +12,8 @@ LAB_ENV_FILE=/etc/kubernetes-app/lab.env
 
 log() { echo "[$(date -u +%FT%TZ)] $*"; }
 
-# k3s darf erst starten, wenn die IPv6-Adresse auf der Schnittstelle liegt.
-# DHCPv6 braucht nach dem Boot einige Sekunden.
+# k3s may only start once the IPv6 address is on the interface.
+# DHCPv6 needs a few seconds after boot.
 if [ -n "${NODE_IPV6:-}" ]; then
     log "Warte auf IPv6-Adresse ${NODE_IPV6}"
     for _ in $(seq 1 120); do

@@ -1,13 +1,13 @@
 #cloud-config
 
-# ── bootcmd: läuft vor write_files ────────────────────────────────────────────
-# Verzeichnisse anlegen, die write_files benötigt.
+# ── bootcmd: runs before write_files ──────────────────────────────────────────
+# Create directories that write_files needs.
 bootcmd:
   - mkdir -p /etc/kubernetes-app /etc/rancher/k3s /var/lib/rancher/k3s/server/tls
   - chmod 700 /var/lib/rancher/k3s/server/tls
 
-# ── write_files: nur Konfiguration ────────────────────────────────────────────
-# Die Logik (k3s, labctl) liegt im Packer-Image unter /usr/local/bin.
+# ── write_files: configuration only ───────────────────────────────────────────
+# The logic (k3s, labctl) lives in the Packer image under /usr/local/bin.
 write_files:
   - path: /etc/kubernetes-app/lab.env
     permissions: '0644'
@@ -24,7 +24,7 @@ write_files:
       CAMPUS_CIDR_V4=${campus_cidr_v4}
       CAMPUS_CIDR_V6=${campus_cidr_v6}
 
-  # Startliste: Benutzer, Passwort, NodePort. Wird nur von `labctl sync` gelesen.
+  # Initial list: user, password, NodePort. Only read by `labctl sync`.
   - path: /etc/kubernetes-app/students.tsv
     permissions: '0600'
     content: |
@@ -59,13 +59,13 @@ write_files:
       kubelet-arg:
         - "pod-max-pids=512"
 
-  # Statischer Admin-Token: wer ihn kennt, ist cluster-admin (Gruppe system:masters).
+  # Static admin token: whoever knows it is cluster-admin (group system:masters).
   - path: /etc/rancher/k3s/tokens.csv
     permissions: '0600'
     content: |
       ${admin_token},lab-admin,lab-admin,"system:masters"
 
-  # Eigene Server-CA, damit die Kubeconfig die CA schon beim Terraform-Apply kennt.
+  # Own server CA, so the kubeconfig already knows the CA at Terraform apply time.
   - path: /var/lib/rancher/k3s/server/tls/server-ca.crt
     permissions: '0644'
     content: |
@@ -76,7 +76,7 @@ write_files:
     content: |
       ${indent(6, chomp(ca_key_pem))}
 
-# ── runcmd: Erststart ─────────────────────────────────────────────────────────
-# Nur eine Zeile — Doppelpunkte außerhalb von Strings brechen das YAML-Parsing.
+# ── runcmd: first boot ────────────────────────────────────────────────────────
+# One line only — colons outside of strings break YAML parsing.
 runcmd:
   - bash /usr/local/bin/kubernetes-app-provision.sh > /var/log/kubernetes-app-provision.log 2>&1

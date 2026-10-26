@@ -47,7 +47,7 @@ build {
     ]
   }
 
-  # labctl, Erststart-Skript und Student-Image-Quellen auf die Build-VM laden.
+  # Upload labctl, the first-boot script and the student image sources to the build VM.
   provisioner "file" {
     source      = "files/"
     destination = local.files_dir

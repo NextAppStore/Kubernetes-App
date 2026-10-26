@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# labctl - Verwaltung der Student-Pods in der Kubernetes-App.
+# labctl - management of the student pods in the Kubernetes-App.
 #
-# Laeuft auf der VM (als root, nutzt /etc/rancher/k3s/k3s.yaml) oder lokal mit
-# einer Admin-Kubeconfig:   KUBECONFIG=./kurs.kubeconfig labctl list
+# Runs on the VM (as root, uses /etc/rancher/k3s/k3s.yaml) or locally with
+# an admin kubeconfig:   KUBECONFIG=./kurs.kubeconfig labctl list
 #
-# Alle Zustaende liegen im Cluster (Namespace "lab"): Deployment, Service,
-# Secret und PVC je Student. Die Datei /etc/kubernetes-app/students.tsv wird
-# nur von `labctl sync` beim ersten Start gelesen.
+# All state lives in the cluster (namespace "lab"): deployment, service,
+# secret and PVC per student. The file /etc/kubernetes-app/students.tsv is
+# only read by `labctl sync` on first start.
 set -euo pipefail
 
 NAMESPACE="${LAB_NAMESPACE:-lab}"
@@ -15,7 +15,7 @@ STUDENTS_FILE="${STUDENTS_FILE:-/etc/kubernetes-app/students.tsv}"
 FIRST_PORT=30001
 LAST_PORT=32767
 
-# Defaults, ueberschreibbar durch lab.env oder Umgebung.
+# Defaults, overridable via lab.env or the environment.
 LAB_IMAGE="kubernetes-app/student:1"
 POD_CPU_REQUEST="100m"
 POD_CPU_LIMIT="1"
@@ -27,7 +27,7 @@ CLUSTER_CIDR_V4="10.42.0.0/16"
 CLUSTER_CIDR_V6="fd00:42::/56"
 SERVICE_CIDR_V4="10.43.0.0/16"
 SERVICE_CIDR_V6="fd00:43::/112"
-# Startwert fuer den Pentest-Modus. Danach gilt das Label am Namespace.
+# Initial value for pentest mode. Afterwards the label on the namespace applies.
 POD_TO_POD="false"
 CAMPUS_CIDR_V4="141.72.0.0/16"
 CAMPUS_CIDR_V6="2001:7c0::/32"
@@ -86,7 +86,7 @@ random_password() {
 }
 
 node_ips() {
-    # Interne Adressen der Knoten, eine pro Zeile.
+    # Internal addresses of the nodes, one per line.
     kc get nodes -o jsonpath='{range .items[*].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}'
 }
 
@@ -95,8 +95,8 @@ generation_of() {
         -o jsonpath='{.spec.template.metadata.annotations.lab-generation}' 2>/dev/null || true
 }
 
-# Das Label am Namespace ist massgeblich, damit add-student und sync einen
-# umgeschalteten Modus nicht auf den Startwert aus lab.env zuruecksetzen.
+# The label on the namespace is authoritative, so that add-student and sync do
+# not reset a switched mode back to the initial value from lab.env.
 peer_mode() {
     local mode
     mode="$(kc get namespace "${NAMESPACE}" -o jsonpath="{.metadata.labels.${PEER_LABEL}}" 2>/dev/null || true)"
@@ -106,16 +106,16 @@ peer_mode() {
     esac
 }
 
-# --- Manifeste ---------------------------------------------------------------
+# --- Manifests ---------------------------------------------------------------
 
 apply_namespace_and_policy() {
     local mode="${1:-}" node4 node6 ip except4 except6
     [ -n "${mode}" ] || mode="$(peer_mode)"
     except4="\"${CLUSTER_CIDR_V4}\", \"${SERVICE_CIDR_V4}\", \"169.254.0.0/16\""
     except6="\"${CLUSTER_CIDR_V6}\", \"${SERVICE_CIDR_V6}\", \"fe80::/10\""
-    # Im Pentest-Modus duerfen Angriffe nur die eigenen Pods treffen: Pod-Verkehr
-    # wird per NAT mit der oeffentlichen VM-IP gesendet und erreicht sonst andere
-    # VMs und die NodePorts anderer Teams.
+    # In pentest mode attacks may only hit the own pods: pod traffic
+    # is sent via NAT with the public VM IP and would otherwise reach other
+    # VMs and the NodePorts of other teams.
     if [ "${mode}" = "open" ]; then
         except4="${except4}, \"${CAMPUS_CIDR_V4}\""
         except6="${except6}, \"${CAMPUS_CIDR_V6}\""
@@ -131,9 +131,9 @@ apply_namespace_and_policy() {
         fi
     done < <(node_ips)
 
-    # Egress: Die Studenten duerfen ins Internet und Campusnetz, aber nicht an
-    # andere Pods, die Kubernetes-API, den Knoten selbst und den OpenStack-
-    # Metadatendienst (169.254.169.254 liefert user_data mit Passwoertern und Tokens).
+    # Egress: students may reach the internet and campus network, but not
+    # other pods, the Kubernetes API, the node itself or the OpenStack
+    # metadata service (169.254.169.254 serves user_data with passwords and tokens).
     kc apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
@@ -142,7 +142,7 @@ metadata:
   labels:
     ${PEER_LABEL}: ${mode}
 ---
-# DNS-Namen <user>.students.${NAMESPACE}.svc.cluster.local fuer alle Ports.
+# DNS names <user>.students.${NAMESPACE}.svc.cluster.local for all ports.
 apiVersion: v1
 kind: Service
 metadata:
@@ -199,8 +199,8 @@ spec:
             except: [${except6}]
 EOF
 
-    # NetworkPolicies sind additiv: diese zweite Policy oeffnet nur den Verkehr
-    # zwischen Student-Pods, alle Sperren von student-isolation bleiben.
+    # NetworkPolicies are additive: this second policy only opens traffic
+    # between student pods, all restrictions of student-isolation remain.
     if [ "${mode}" = "open" ]; then
         kc apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
@@ -309,8 +309,8 @@ spec:
             - name: ssh
               containerPort: 22
           securityContext:
-            # sudo braucht Privilege Escalation. NET_RAW (ARP/RA-Spoofing im
-            # Pod-Netz) und MKNOD sind nicht noetig und werden entfernt.
+            # sudo needs privilege escalation. NET_RAW (ARP/RA spoofing in the
+            # pod network) and MKNOD are not needed and are dropped.
             allowPrivilegeEscalation: true
             privileged: false
             capabilities:
@@ -355,8 +355,8 @@ metadata:
     student: ${user}
 spec:
   type: NodePort
-  # Local: die Client-Adresse bleibt erhalten, damit die NetworkPolicy
-  # (Pod-Netz gesperrt) externe Clients durchlaesst.
+  # Local: the client address is preserved, so that the NetworkPolicy
+  # (pod network blocked) lets external clients through.
   externalTrafficPolicy: Local
   ipFamilyPolicy: PreferDualStack
   selector:
@@ -370,7 +370,7 @@ spec:
 EOF
 }
 
-# --- Hilfsfunktionen ------------------------------------------------------
+# --- Helper functions -----------------------------------------------------
 
 used_ports() {
     kn get service -l role=student -o jsonpath='{range .items[*]}{.spec.ports[0].nodePort}{"\n"}{end}' 2>/dev/null || true
@@ -392,7 +392,7 @@ wait_ready() {
     kn rollout status "deployment/student-$1" --timeout=180s
 }
 
-# --- Befehle -----------------------------------------------------------------
+# --- Commands ----------------------------------------------------------------
 
 cmd_list() {
     local user port gen pod phase age
@@ -454,8 +454,8 @@ cmd_reassign() {
     [ -n "${user}" ] || die "Verwendung: labctl reassign <user>"
     require_student "${user}"
     gen="$(bump_generation "${user}")"
-    # Eine geaenderte Pod-Template-Annotation startet einen neuen Pod. Mit der
-    # Strategie "Recreate" wird der alte Pod zuerst beendet.
+    # A changed pod template annotation starts a new pod. With the
+    # "Recreate" strategy the old pod is terminated first.
     kn patch deployment "student-${user}" --type merge \
         -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"lab-generation\":\"${gen}\"}}}}}"
     wait_ready "${user}"

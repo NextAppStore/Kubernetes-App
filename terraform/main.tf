@@ -22,23 +22,23 @@ provider "openstack" {
 }
 
 ############################
-# APP-DEFAULTS
+# APP DEFAULTS
 ############################
 
 locals {
   app_name = "kubernetes-app"
 
-  # Student-Image im Packer-Build (muss zu packer/variables.pkr.hcl passen).
+  # Student image from the Packer build (must match packer/variables.pkr.hcl).
   lab_image = "kubernetes-app/student:1"
 
-  # Erster NodePort. Der n-te Student (alphabetisch) bekommt first + n - 1.
+  # First NodePort. The n-th student (alphabetical) gets first + n - 1.
   first_node_port = 30001
 
-  # Die Fixed-IPs von DHBWv4/DHBWV6 sind oeffentlich geroutet, eine Floating IP
-  # ist nicht noetig.
+  # The fixed IPs of DHBWv4/DHBWV6 are publicly routed, a floating IP
+  # is not needed.
 }
 
-# Packer-Image aus Glance laden
+# Load the Packer image from Glance
 data "openstack_images_image_v2" "image" {
   name        = var.image_name
   most_recent = true
@@ -49,9 +49,9 @@ data "openstack_images_image_v2" "image" {
 ############################
 
 locals {
-  # E-Mail -> Linux-Benutzername. Der Name wird auch Teil von Kubernetes-
-  # Objektnamen und muss deshalb ein DNS-Label sein: Kleinbuchstaben, Ziffern
-  # und "-", beginnt mit einem Buchstaben, endet nicht mit "-", max. 30 Zeichen.
+  # Email -> Linux username. The name also becomes part of Kubernetes
+  # object names and therefore must be a DNS label: lowercase letters, digits
+  # and "-", starts with a letter, does not end with "-", max. 30 characters.
   raw_users = flatten([
     for team, members in var.users : [
       for member in members : {
@@ -70,8 +70,8 @@ locals {
     }
   ]
 
-  # Zwei E-Mail-Adressen mit demselben Benutzernamen im selben Team fuehren
-  # absichtlich zu einem "Duplicate object key"-Fehler.
+  # Two email addresses with the same username in the same team
+  # deliberately lead to a "Duplicate object key" error.
   users_map  = { for user in local.all_users : "${user.team}-${user.username}" => user }
   teams_list = distinct([for user in local.all_users : user.team])
 
@@ -86,8 +86,8 @@ locals {
   }
 }
 
-# Ein Passwort pro Student. Nur Buchstaben und Ziffern, damit es sich in der
-# Shell, in YAML und im Terminal ohne Quoting verwenden laesst.
+# One password per student. Letters and digits only, so it can be used in the
+# shell, in YAML and in the terminal without quoting.
 resource "random_password" "user_passwords" {
   for_each    = local.users_map
   length      = 16
@@ -98,12 +98,12 @@ resource "random_password" "user_passwords" {
 }
 
 ############################
-# ZUGANG ZUM CLUSTER (je Team)
+# CLUSTER ACCESS (per team)
 ############################
 
-# Eigene CA fuer das API-Serverzertifikat. Damit kennt Terraform die CA schon
-# beim Apply und kann eine vollstaendige Kubeconfig erzeugen, ohne dass jemand
-# eine Datei von der VM holen muss.
+# Own CA for the API server certificate. This way Terraform already knows the CA
+# at apply time and can generate a complete kubeconfig without anyone
+# having to fetch a file from the VM.
 resource "tls_private_key" "ca" {
   for_each    = toset(local.teams_list)
   algorithm   = "ECDSA"
@@ -123,7 +123,7 @@ resource "tls_self_signed_cert" "ca" {
   }
 }
 
-# Admin-Token (Gruppe system:masters = cluster-admin) fuer die Dozenten-Kubeconfig.
+# Admin token (group system:masters = cluster-admin) for the lecturer kubeconfig.
 resource "random_password" "admin_token" {
   for_each = toset(local.teams_list)
   length   = 40
@@ -134,16 +134,16 @@ resource "random_password" "admin_token" {
 # TEAM-BASED VMs
 ############################
 
-# Pro Team ein Port (mit shared und eigener Security Group)
+# One port per team (with shared and app-specific security group)
 resource "openstack_networking_port_v2" "team_port" {
   for_each           = toset(local.teams_list)
   network_id         = var.network_uuid
   security_group_ids = [var.shared_secgroup_id, openstack_networking_secgroup_v2.lab.id]
 }
 
-# DHBWV6 ist dual-stack: ``all_fixed_ips`` enthaelt pro Team sowohl die
-# v4- als auch die v6-Adresse, Reihenfolge nicht garantiert. Wir trennen
-# per Doppelpunkt-Check (IPv6-Literale enthalten immer ":", IPv4 nie).
+# DHBWV6 is dual-stack: ``all_fixed_ips`` contains both the v4 and the v6
+# address per team, order not guaranteed. We split them
+# with a colon check (IPv6 literals always contain ":", IPv4 never does).
 locals {
   fixed_ip_v4 = {
     for team in local.teams_list : team => try([
@@ -158,7 +158,7 @@ locals {
     ][0], null)
   }
 
-  # Hauptadresse fuer Studenten und Dozent: IPv6, falls vorhanden.
+  # Primary address for students and lecturer: IPv6, if available.
   primary_ip = {
     for team in local.teams_list : team => local.fixed_ip_v6[team] != null ? local.fixed_ip_v6[team] : local.fixed_ip_v4[team]
   }
@@ -167,7 +167,7 @@ locals {
   }
 }
 
-# Pro Team eine VM mit einem k3s-Cluster
+# One VM per team with a k3s cluster
 resource "openstack_compute_instance_v2" "team_vm" {
   for_each = toset(local.teams_list)
 
@@ -176,8 +176,8 @@ resource "openstack_compute_instance_v2" "team_vm" {
   flavor_name = var.flavor_name
   key_pair    = var.key_pair_name != "" ? var.key_pair_name : null
 
-  # Optional: groessere Root-Platte als Volume. Dort liegen die Home-
-  # Verzeichnisse (local-path unter /var/lib/rancher/k3s/storage).
+  # Optional: larger root disk as a volume. The home
+  # directories live there (local-path under /var/lib/rancher/k3s/storage).
   dynamic "block_device" {
     for_each = var.root_disk_gb > 0 ? [1] : []
     content {
@@ -228,15 +228,15 @@ resource "openstack_compute_instance_v2" "team_vm" {
     app  = local.app_name
   }
 
-  # Neue Studenten kommen spaeter per `labctl add-student`. Eine geaenderte
-  # Studentenliste darf die VM (und damit alle Home-Verzeichnisse) nicht ersetzen.
+  # New students are added later via `labctl add-student`. A changed
+  # student list must not replace the VM (and thus all home directories).
   lifecycle {
     ignore_changes = [user_data]
   }
 }
 
 ############################
-# KUBECONFIG (Dozent, cluster-admin)
+# KUBECONFIG (lecturer, cluster-admin)
 ############################
 
 locals {
