@@ -1,8 +1,6 @@
 # Terraform files
 .terraform/
 docs/
-tests/
-check.sh
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
