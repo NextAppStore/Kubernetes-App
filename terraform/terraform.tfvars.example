@@ -1,7 +1,7 @@
-# Kopieren nach terraform.tfvars (steht in .gitignore) und anpassen.
-# Der Worker der Plattform injiziert users und image_name normalerweise selbst.
+# Copy to terraform.tfvars (listed in .gitignore) and adjust.
+# The platform worker normally injects users and image_name itself.
 
-# Ein Kurs = ein Team = eine VM mit einem k3s-Cluster.
+# One course = one team = one VM with a k3s cluster.
 users = {
   kurs = [
     { email = "anna.mueller@example.com" },
@@ -10,18 +10,20 @@ users = {
   ]
 }
 
-image_name  = "kubernetes-app-v0.1.0"
+image_name = "kubernetes-app-v0.1.0"
+
+# Resources of the whole VM. The plan fails if the students do not fit.
 flavor_name = "gp1.large"
+# root_disk_gb = 40    # default; 0 = disk of the flavor (gp1.large: only 10 GB)
 
-# Optional: SSH-Zugang zur VM (Benutzer ubuntu) fuer Fehlersuche.
+# Resources per student pod (reserved, request = limit).
+# pod_cpu       = 0.5
+# pod_memory_mb = 1024
+# pod_disk_gb   = 5
+
+# Network of the student pods (switchable later with `labctl network`).
+# allow_pod_communication = true   # pods reach each other (pentest)
+# allow_internet          = false  # no internet, only DNS
+
+# Optional: SSH access to the VM (user ubuntu) for debugging.
 # key_pair_name = "erik-dev"
-
-# Optional: groessere Platte fuer die Home-Verzeichnisse.
-# root_disk_gb = 100
-
-# Netze, die SSH und die API erreichen duerfen (Campus/VPN).
-# allowed_cidr_v4 = "141.72.0.0/16"
-# allowed_cidr_v6 = "2001:7c0::/32"
-
-# Pentest-Modus: Student-Pods erreichen sich gegenseitig (spaeter: labctl network).
-# allow_pod_communication = true

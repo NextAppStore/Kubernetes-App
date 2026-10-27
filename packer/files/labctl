@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# labctl - Verwaltung der Student-Pods in der Kubernetes-App.
+# labctl - manages the student pods of the Kubernetes-App.
 #
-# Laeuft auf der VM (als root, nutzt /etc/rancher/k3s/k3s.yaml) oder lokal mit
-# einer Admin-Kubeconfig:   KUBECONFIG=./kurs.kubeconfig labctl list
+# Runs on the VM (as root, uses /etc/rancher/k3s/k3s.yaml) or locally with an
+# admin kubeconfig:   KUBECONFIG=./kurs.kubeconfig labctl list
 #
-# Alle Zustaende liegen im Cluster (Namespace "lab"): Deployment, Service,
-# Secret und PVC je Student. Die Datei /etc/kubernetes-app/students.tsv wird
-# nur von `labctl sync` beim ersten Start gelesen.
+# All state lives in the cluster (namespace "lab"): Deployment, Service,
+# Secret and PVC per student, the network modes as namespace labels. The file
+# /etc/kubernetes-app/students.tsv is only read by `labctl sync` on first boot.
 set -euo pipefail
 
 NAMESPACE="${LAB_NAMESPACE:-lab}"
@@ -15,23 +15,25 @@ STUDENTS_FILE="${STUDENTS_FILE:-/etc/kubernetes-app/students.tsv}"
 FIRST_PORT=30001
 LAST_PORT=32767
 
-# Defaults, ueberschreibbar durch lab.env oder Umgebung.
+# Defaults, overridable by lab.env or the environment.
 LAB_IMAGE="kubernetes-app/student:1"
-POD_CPU_REQUEST="100m"
-POD_CPU_LIMIT="1"
-POD_MEMORY_REQUEST="256Mi"
-POD_MEMORY_LIMIT="1Gi"
+# Request = limit: every pod gets its resources guaranteed. Terraform checks
+# at plan time that all students fit on the flavor.
+POD_CPU="0.5"
+POD_MEMORY="1Gi"
 POD_DISK="5Gi"
 POD_EPHEMERAL_LIMIT="2Gi"
 CLUSTER_CIDR_V4="10.42.0.0/16"
 CLUSTER_CIDR_V6="fd00:42::/56"
 SERVICE_CIDR_V4="10.43.0.0/16"
 SERVICE_CIDR_V6="fd00:43::/112"
-# Startwert fuer den Pentest-Modus. Danach gilt das Label am Namespace.
+# Initial network modes. After first boot the namespace labels win.
 POD_TO_POD="false"
+POD_INTERNET="true"
 CAMPUS_CIDR_V4="141.72.0.0/16"
 CAMPUS_CIDR_V6="2001:7c0::/32"
 PEER_LABEL="kubernetes-app/peer-access"
+INTERNET_LABEL="kubernetes-app/internet"
 
 if [ -r "${LAB_ENV_FILE}" ]; then
     # shellcheck disable=SC1090
@@ -46,47 +48,50 @@ kc() { kubectl "$@"; }
 kn() { kubectl --namespace "${NAMESPACE}" "$@"; }
 
 die() {
-    echo "Fehler: $*" >&2
+    echo "Error: $*" >&2
     exit 1
 }
 
 usage() {
     cat <<'EOF'
-Verwendung: labctl <befehl> [argumente]
+Usage: labctl <command> [arguments]
 
-  list                           Alle Studenten mit Status, Port und Generation
-  reassign <user>                Neuen Pod zuweisen (Home-Verzeichnis bleibt)
-  reset <user> [--new-password]  Neuen Pod und leeres Home (Daten werden geloescht)
-  passwd <user> [passwort]       Passwort aendern (ohne Angabe: zufaellig)
-  add-student <user> [passwort] [port]
-  remove-student <user> [--yes]  Pod, Service, Secret und Home loeschen
-  sync                           Studenten aus /etc/kubernetes-app/students.tsv anlegen
-  network <open|isolated|status> Pentest-Modus: Pods erreichen sich gegenseitig (open)
-  shell <user>                   Shell im Pod des Studenten oeffnen
-  logs <user>                    Logs des Pods anzeigen
+  list                           All students with status, port and generation
+  reassign <user>                Assign a new pod (home directory is kept)
+  reset <user> [--new-password]  New pod and empty home (data is deleted)
+  passwd <user> [password]       Change the password (random if omitted)
+  add-student <user> [password] [port]
+  remove-student <user> [--yes]  Delete pod, service, secret and home
+  sync                           Create students from /etc/kubernetes-app/students.tsv
+  wait-ready [--timeout <s>]     Wait until all student pods run (default 600 s)
+  network peers <on|off>         Student pods reach each other (pentest)
+  network internet <on|off>      Student pods reach the internet
+  network status                 Show both network modes
+  shell <user>                   Open a shell in the student's pod
+  logs <user>                    Show the pod logs
 EOF
 }
 
 valid_user() {
-    [[ "$1" =~ ^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$ ]] || die "Ungueltiger Benutzername '$1' (erlaubt: a-z, 0-9, -; Anfang Buchstabe, Ende Buchstabe oder Ziffer; max. 30 Zeichen)"
+    [[ "$1" =~ ^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$ ]] || die "Invalid user name '$1' (allowed: a-z, 0-9, -; starts with a letter, ends with a letter or digit; max. 30 characters)"
 }
 
 student_exists() { kn get deployment "student-$1" >/dev/null 2>&1; }
 
 require_student() {
     valid_user "$1"
-    student_exists "$1" || die "Student '$1' existiert nicht (labctl list)"
+    student_exists "$1" || die "Student '$1' does not exist (labctl list)"
 }
 
 random_password() {
     local pw
     pw="$(LC_ALL=C tr -dc 'A-Za-z0-9' </dev/urandom | head -c 16 || true)"
-    [ "${#pw}" -eq 16 ] || die "Passwort konnte nicht erzeugt werden"
+    [ "${#pw}" -eq 16 ] || die "Could not generate a password"
     printf '%s' "${pw}"
 }
 
 node_ips() {
-    # Interne Adressen der Knoten, eine pro Zeile.
+    # Internal addresses of the nodes, one per line.
     kc get nodes -o jsonpath='{range .items[*].status.addresses[?(@.type=="InternalIP")]}{.address}{"\n"}{end}'
 }
 
@@ -95,54 +100,77 @@ generation_of() {
         -o jsonpath='{.spec.template.metadata.annotations.lab-generation}' 2>/dev/null || true
 }
 
-# Das Label am Namespace ist massgeblich, damit add-student und sync einen
-# umgeschalteten Modus nicht auf den Startwert aus lab.env zuruecksetzen.
+namespace_label() {
+    kc get namespace "${NAMESPACE}" -o jsonpath="{.metadata.labels.$1}" 2>/dev/null || true
+}
+
+# The namespace labels are authoritative, so add-student and sync do not reset
+# a switched mode to the initial value from lab.env.
 peer_mode() {
     local mode
-    mode="$(kc get namespace "${NAMESPACE}" -o jsonpath="{.metadata.labels.${PEER_LABEL}}" 2>/dev/null || true)"
+    mode="$(namespace_label "${PEER_LABEL}")"
     case "${mode}" in
         open | isolated) echo "${mode}" ;;
         *) if [ "${POD_TO_POD}" = "true" ]; then echo open; else echo isolated; fi ;;
     esac
 }
 
-# --- Manifeste ---------------------------------------------------------------
+internet_mode() {
+    local mode
+    mode="$(namespace_label "${INTERNET_LABEL}")"
+    case "${mode}" in
+        allowed | blocked) echo "${mode}" ;;
+        *) if [ "${POD_INTERNET}" = "true" ]; then echo allowed; else echo blocked; fi ;;
+    esac
+}
+
+# --- Manifests -----------------------------------------------------------------
 
 apply_namespace_and_policy() {
-    local mode="${1:-}" node4 node6 ip except4 except6
-    [ -n "${mode}" ] || mode="$(peer_mode)"
-    except4="\"${CLUSTER_CIDR_V4}\", \"${SERVICE_CIDR_V4}\", \"169.254.0.0/16\""
-    except6="\"${CLUSTER_CIDR_V6}\", \"${SERVICE_CIDR_V6}\", \"fe80::/10\""
-    # Im Pentest-Modus duerfen Angriffe nur die eigenen Pods treffen: Pod-Verkehr
-    # wird per NAT mit der oeffentlichen VM-IP gesendet und erreicht sonst andere
-    # VMs und die NodePorts anderer Teams.
-    if [ "${mode}" = "open" ]; then
-        except4="${except4}, \"${CAMPUS_CIDR_V4}\""
-        except6="${except6}, \"${CAMPUS_CIDR_V6}\""
-    fi
-    while read -r ip; do
-        [ -n "${ip}" ] || continue
-        if [[ "${ip}" == *:* ]]; then
-            node6="${ip}"
-            except6="${except6}, \"${node6}/128\""
-        else
-            node4="${ip}"
-            except4="${except4}, \"${node4}/32\""
-        fi
-    done < <(node_ips)
+    local peers="${1:-}" internet="${2:-}" ip except4 except6 internet_rule=""
+    [ -n "${peers}" ] || peers="$(peer_mode)"
+    [ -n "${internet}" ] || internet="$(internet_mode)"
 
-    # Egress: Die Studenten duerfen ins Internet und Campusnetz, aber nicht an
-    # andere Pods, die Kubernetes-API, den Knoten selbst und den OpenStack-
-    # Metadatendienst (169.254.169.254 liefert user_data mit Passwoertern und Tokens).
+    # Egress to the internet only. Blocked in every mode: pod and service
+    # network, the node itself (API, kubelet), link-local (the OpenStack
+    # metadata service 169.254.169.254 serves user_data with passwords and
+    # tokens) and the campus network. Pod traffic leaves the VM via NAT with
+    # its public IP and would otherwise reach other VMs and the NodePorts of
+    # other teams.
+    if [ "${internet}" = "allowed" ]; then
+        except4="\"${CLUSTER_CIDR_V4}\", \"${SERVICE_CIDR_V4}\", \"169.254.0.0/16\", \"${CAMPUS_CIDR_V4}\""
+        except6="\"${CLUSTER_CIDR_V6}\", \"${SERVICE_CIDR_V6}\", \"fe80::/10\", \"${CAMPUS_CIDR_V6}\""
+        while read -r ip; do
+            [ -n "${ip}" ] || continue
+            if [[ "${ip}" == *:* ]]; then
+                except6="${except6}, \"${ip}/128\""
+            else
+                except4="${except4}, \"${ip}/32\""
+            fi
+        done < <(node_ips)
+        internet_rule="
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except: [${except4}]
+        - ipBlock:
+            cidr: ::/0
+            except: [${except6}]"
+    fi
+
+    # Ingress: SSH from outside the pod network. Egress: DNS always, the
+    # internet only if allowed. Other pods are reachable only through
+    # student-peer-access below.
     kc apply -f - <<EOF
 apiVersion: v1
 kind: Namespace
 metadata:
   name: ${NAMESPACE}
   labels:
-    ${PEER_LABEL}: ${mode}
+    ${PEER_LABEL}: ${peers}
+    ${INTERNET_LABEL}: ${internet}
 ---
-# DNS-Namen <user>.students.${NAMESPACE}.svc.cluster.local fuer alle Ports.
+# DNS names <user>.students.${NAMESPACE}.svc.cluster.local for all ports.
 apiVersion: v1
 kind: Service
 metadata:
@@ -189,19 +217,12 @@ spec:
         - protocol: UDP
           port: 53
         - protocol: TCP
-          port: 53
-    - to:
-        - ipBlock:
-            cidr: 0.0.0.0/0
-            except: [${except4}]
-        - ipBlock:
-            cidr: ::/0
-            except: [${except6}]
+          port: 53${internet_rule}
 EOF
 
-    # NetworkPolicies sind additiv: diese zweite Policy oeffnet nur den Verkehr
-    # zwischen Student-Pods, alle Sperren von student-isolation bleiben.
-    if [ "${mode}" = "open" ]; then
+    # NetworkPolicies are additive: this second policy only opens traffic
+    # between student pods, all blocks of student-isolation stay.
+    if [ "${peers}" = "open" ]; then
         kc apply -f - <<EOF
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -309,19 +330,19 @@ spec:
             - name: ssh
               containerPort: 22
           securityContext:
-            # sudo braucht Privilege Escalation. NET_RAW (ARP/RA-Spoofing im
-            # Pod-Netz) und MKNOD sind nicht noetig und werden entfernt.
+            # sudo needs privilege escalation. NET_RAW (ARP/RA spoofing in the
+            # pod network) and MKNOD are not needed and get dropped.
             allowPrivilegeEscalation: true
             privileged: false
             capabilities:
               drop: ["NET_RAW", "MKNOD"]
           resources:
             requests:
-              cpu: ${POD_CPU_REQUEST}
-              memory: ${POD_MEMORY_REQUEST}
+              cpu: "${POD_CPU}"
+              memory: ${POD_MEMORY}
             limits:
-              cpu: "${POD_CPU_LIMIT}"
-              memory: ${POD_MEMORY_LIMIT}
+              cpu: "${POD_CPU}"
+              memory: ${POD_MEMORY}
               ephemeral-storage: ${POD_EPHEMERAL_LIMIT}
           readinessProbe:
             tcpSocket:
@@ -355,8 +376,8 @@ metadata:
     student: ${user}
 spec:
   type: NodePort
-  # Local: die Client-Adresse bleibt erhalten, damit die NetworkPolicy
-  # (Pod-Netz gesperrt) externe Clients durchlaesst.
+  # Local: the client address is preserved, so the NetworkPolicy (pod
+  # network blocked) lets external clients through.
   externalTrafficPolicy: Local
   ipFamilyPolicy: PreferDualStack
   selector:
@@ -370,7 +391,7 @@ spec:
 EOF
 }
 
-# --- Hilfsfunktionen ------------------------------------------------------
+# --- Helpers -------------------------------------------------------------------
 
 used_ports() {
     kn get service -l role=student -o jsonpath='{range .items[*]}{.spec.ports[0].nodePort}{"\n"}{end}' 2>/dev/null || true
@@ -385,14 +406,31 @@ next_free_port() {
             return
         fi
     done
-    die "Kein freier NodePort mehr zwischen ${FIRST_PORT} und ${LAST_PORT}"
+    die "No free NodePort left between ${FIRST_PORT} and ${LAST_PORT}"
+}
+
+all_students() {
+    kn get deployment -l role=student -o jsonpath='{range .items[*]}{.metadata.labels.student}{"\n"}{end}' | sort
+}
+
+is_ready() {
+    [ "$(kn get deployment "student-$1" -o jsonpath='{.status.readyReplicas}' 2>/dev/null || true)" = "1" ]
+}
+
+# One line explaining why the pod of a student is not ready, e.g.
+# "Pending, Unschedulable: 0/1 nodes are available: 1 Insufficient memory."
+pod_problem() {
+    local problem
+    problem="$(kn get pods -l "student=$1" -o jsonpath='{.items[0].status.phase}{range .items[0].status.conditions[?(@.status=="False")]}, {.reason}: {.message}{end}{range .items[0].status.containerStatuses[*]}, {.state.waiting.reason} {.state.waiting.message}{.state.terminated.reason}{end}' 2>/dev/null || true)"
+    problem="$(tr -s ' \n' ' ' <<<"${problem}")"
+    echo "${problem:-no pod}"
 }
 
 wait_ready() {
     kn rollout status "deployment/student-$1" --timeout=180s
 }
 
-# --- Befehle -----------------------------------------------------------------
+# --- Commands ------------------------------------------------------------------
 
 cmd_list() {
     local user port gen pod phase age
@@ -405,42 +443,46 @@ cmd_list() {
         phase="$(kn get pods -l "student=${user}" -o jsonpath='{.items[0].status.phase}' 2>/dev/null || true)"
         age="$(kn get pods -l "student=${user}" -o jsonpath='{.items[0].metadata.creationTimestamp}' 2>/dev/null || true)"
         printf '%-24s %-8s %-4s %-30s %-10s %s\n' "${user}" "${port}" "${gen:--}" "${pod:--}" "${phase:-none}" "${age}"
-    done < <(kn get deployment -l role=student -o jsonpath='{range .items[*]}{.metadata.labels.student}{"\n"}{end}' | sort)
+    done < <(all_students)
 }
 
 cmd_add_student() {
     local user="${1:-}" password="${2:-}" port="${3:-}"
-    [ -n "${user}" ] || die "Verwendung: labctl add-student <user> [passwort] [port]"
+    [ -n "${user}" ] || die "Usage: labctl add-student <user> [password] [port]"
     valid_user "${user}"
-    student_exists "${user}" && die "Student '${user}' existiert bereits"
+    student_exists "${user}" && die "Student '${user}' already exists"
     [ -n "${password}" ] || password="$(random_password)"
     [ -n "${port}" ] || port="$(next_free_port)"
     if ! [[ "${port}" =~ ^[0-9]+$ ]] || [ "${port}" -lt 30000 ] || [ "${port}" -gt "${LAST_PORT}" ]; then
-        die "Port muss zwischen 30000 und ${LAST_PORT} liegen"
+        die "Port must be between 30000 and ${LAST_PORT}"
     fi
     if grep -qx "${port}" <<<"$(used_ports)"; then
-        die "Port ${port} ist bereits vergeben"
+        die "Port ${port} is already in use"
     fi
 
     apply_namespace_and_policy
     apply_pvc "${user}"
     apply_secret "${user}" "${password}"
     apply_workload "${user}" "${port}" 1
-    echo "Student '${user}' angelegt: Port ${port}, Passwort ${password}"
+    echo "Student '${user}' created: port ${port}, password ${password}"
+    if ! kn rollout status "deployment/student-${user}" --timeout=60s >/dev/null 2>&1; then
+        echo "Warning: pod of '${user}' is not ready yet: $(pod_problem "${user}")" >&2
+        echo "         If it stays Pending, the VM is full (labctl list)." >&2
+    fi
 }
 
 cmd_remove_student() {
     local user="${1:-}" confirm="${2:-}"
-    [ -n "${user}" ] || die "Verwendung: labctl remove-student <user> [--yes]"
+    [ -n "${user}" ] || die "Usage: labctl remove-student <user> [--yes]"
     require_student "${user}"
     if [ "${confirm}" != "--yes" ]; then
-        read -r -p "Alle Daten von '${user}' loeschen? [ja/NEIN] " answer
-        [ "${answer}" = "ja" ] || die "Abgebrochen"
+        read -r -p "Delete all data of '${user}'? [yes/NO] " answer
+        [ "${answer}" = "yes" ] || die "Aborted"
     fi
     kn delete deployment,service,secret "student-${user}" --ignore-not-found
     kn wait --for=delete pod -l "student=${user}" --timeout=60s || true
     kn delete pvc "home-${user}" --ignore-not-found
-    echo "Student '${user}' entfernt"
+    echo "Student '${user}' removed"
 }
 
 bump_generation() {
@@ -451,20 +493,20 @@ bump_generation() {
 
 cmd_reassign() {
     local user="${1:-}" gen
-    [ -n "${user}" ] || die "Verwendung: labctl reassign <user>"
+    [ -n "${user}" ] || die "Usage: labctl reassign <user>"
     require_student "${user}"
     gen="$(bump_generation "${user}")"
-    # Eine geaenderte Pod-Template-Annotation startet einen neuen Pod. Mit der
-    # Strategie "Recreate" wird der alte Pod zuerst beendet.
+    # A changed pod template annotation starts a new pod. With the "Recreate"
+    # strategy the old pod is stopped first.
     kn patch deployment "student-${user}" --type merge \
         -p "{\"spec\":{\"template\":{\"metadata\":{\"annotations\":{\"lab-generation\":\"${gen}\"}}}}}"
     wait_ready "${user}"
-    echo "Neuer Pod fuer '${user}' (Generation ${gen}), Home-Verzeichnis unveraendert"
+    echo "New pod for '${user}' (generation ${gen}), home directory unchanged"
 }
 
 cmd_reset() {
     local user="${1:-}" newpw="${2:-}" gen
-    [ -n "${user}" ] || die "Verwendung: labctl reset <user> [--new-password]"
+    [ -n "${user}" ] || die "Usage: labctl reset <user> [--new-password]"
     require_student "${user}"
     gen="$(bump_generation "${user}")"
 
@@ -476,65 +518,112 @@ cmd_reset() {
         local password
         password="$(random_password)"
         apply_secret "${user}" "${password}"
-        echo "Neues Passwort fuer '${user}': ${password}"
+        echo "New password for '${user}': ${password}"
     fi
     kn patch deployment "student-${user}" --type merge \
         -p "{\"spec\":{\"replicas\":1,\"template\":{\"metadata\":{\"annotations\":{\"lab-generation\":\"${gen}\"}}}}}"
     wait_ready "${user}"
-    echo "'${user}' zurueckgesetzt (Generation ${gen}), Home-Verzeichnis ist leer"
+    echo "'${user}' reset (generation ${gen}), home directory is empty"
 }
 
 cmd_passwd() {
     local user="${1:-}" password="${2:-}"
-    [ -n "${user}" ] || die "Verwendung: labctl passwd <user> [passwort]"
+    [ -n "${user}" ] || die "Usage: labctl passwd <user> [password]"
     require_student "${user}"
     [ -n "${password}" ] || password="$(random_password)"
     apply_secret "${user}" "${password}"
     cmd_reassign "${user}"
-    echo "Neues Passwort fuer '${user}': ${password}"
+    echo "New password for '${user}': ${password}"
 }
 
 cmd_sync() {
-    [ -r "${STUDENTS_FILE}" ] || die "${STUDENTS_FILE} nicht lesbar"
+    [ -r "${STUDENTS_FILE}" ] || die "${STUDENTS_FILE} is not readable"
     apply_namespace_and_policy
     local user password port
     while read -r user password port; do
         [ -n "${user}" ] || continue
         case "${user}" in \#*) continue ;; esac
         if student_exists "${user}"; then
-            echo "uebersprungen: ${user} (existiert)"
+            echo "skipped: ${user} (exists)"
             continue
         fi
         valid_user "${user}"
         apply_pvc "${user}"
         apply_secret "${user}" "${password}"
         apply_workload "${user}" "${port}" 1
-        echo "angelegt: ${user} (Port ${port})"
+        echo "created: ${user} (port ${port})"
     done <"${STUDENTS_FILE}"
 }
 
-cmd_network() {
-    local mode="${1:-status}"
-    case "${mode}" in
-        open | isolated)
-            apply_namespace_and_policy "${mode}"
-            echo "Pod-zu-Pod-Kommunikation: ${mode}"
-            ;;
-        status) echo "Pod-zu-Pod-Kommunikation: $(peer_mode)" ;;
-        *) die "Verwendung: labctl network <open|isolated|status>" ;;
+# Waits until every student pod is ready. On timeout it prints one line per
+# pod that is not ready and exits non-zero; the first-boot script turns that
+# into the APPSTORE-FAILED marker for the platform.
+cmd_wait_ready() {
+    local timeout=600 deadline user students pending
+    if [ "${1:-}" = "--timeout" ]; then
+        [[ "${2:-}" =~ ^[0-9]+$ ]] || die "Usage: labctl wait-ready [--timeout <seconds>]"
+        timeout="$2"
+    fi
+    students="$(all_students)"
+    if [ -z "${students}" ]; then
+        echo "ready: no students"
+        return 0
+    fi
+    deadline=$((SECONDS + timeout))
+    while :; do
+        pending=""
+        while read -r user; do
+            [ -n "${user}" ] || continue
+            is_ready "${user}" || pending="${pending} ${user}"
+        done <<<"${students}"
+        [ -n "${pending}" ] || break
+        if [ "${SECONDS}" -ge "${deadline}" ]; then
+            for user in ${pending}; do
+                echo "not ready: student-${user}: $(pod_problem "${user}")" >&2
+            done
+            return 1
+        fi
+        sleep 5
+    done
+    echo "ready: $(wc -l <<<"${students}" | tr -d ' ') students"
+}
+
+on_off() {
+    case "$1" in
+        on) echo "$2" ;;
+        off) echo "$3" ;;
+        *) return 1 ;;
     esac
+}
+
+cmd_network() {
+    local what="${1:-status}" value="${2:-}" mode
+    case "${what}" in
+        peers)
+            mode="$(on_off "${value}" open isolated)" || die "Usage: labctl network peers <on|off>"
+            apply_namespace_and_policy "${mode}" "$(internet_mode)"
+            ;;
+        internet)
+            mode="$(on_off "${value}" allowed blocked)" || die "Usage: labctl network internet <on|off>"
+            apply_namespace_and_policy "$(peer_mode)" "${mode}"
+            ;;
+        status) ;;
+        *) die "Usage: labctl network <peers|internet> <on|off> | labctl network status" ;;
+    esac
+    echo "Pod-to-pod communication: $(peer_mode)"
+    echo "Internet access:          $(internet_mode)"
 }
 
 cmd_shell() {
     local user="${1:-}"
-    [ -n "${user}" ] || die "Verwendung: labctl shell <user>"
+    [ -n "${user}" ] || die "Usage: labctl shell <user>"
     require_student "${user}"
     exec kubectl --namespace "${NAMESPACE}" exec -it "deployment/student-${user}" -- su - "${user}"
 }
 
 cmd_logs() {
     local user="${1:-}"
-    [ -n "${user}" ] || die "Verwendung: labctl logs <user>"
+    [ -n "${user}" ] || die "Usage: labctl logs <user>"
     require_student "${user}"
     kn logs "deployment/student-${user}" --tail=200
 }
@@ -554,6 +643,7 @@ main() {
         add-student) cmd_add_student "$@" ;;
         remove-student) cmd_remove_student "$@" ;;
         sync) cmd_sync "$@" ;;
+        wait-ready) cmd_wait_ready "$@" ;;
         network) cmd_network "$@" ;;
         shell) cmd_shell "$@" ;;
         logs) cmd_logs "$@" ;;
