@@ -2,18 +2,18 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# Kubernetes-App: Packer-Provisioning
+# Kubernetes-App: Packer provisioning
 #
-# Das Image enthaelt:
-#   - k3s (Version aus K3S_VERSION), installiert aber noch nicht gestartet
-#   - das Student-Image als Tar in /var/lib/rancher/k3s/agent/images/
-#     (k3s importiert es beim Start, eine Registry ist nicht noetig)
-#   - labctl und das Erststart-Skript unter /usr/local/bin
+# The image contains:
+#   - k3s (version from K3S_VERSION), installed but not started yet
+#   - the student image as a tar in /var/lib/rancher/k3s/agent/images/
+#     (k3s imports it on start, no registry needed)
+#   - labctl and the first-boot script under /usr/local/bin
 #
-# Erwartet von Packer:
-#   K3S_VERSION   z.B. v1.31.4+k3s1
-#   STUDENT_IMAGE z.B. kubernetes-app/student:1
-#   FILES_DIR     Verzeichnis mit den hochgeladenen Dateien
+# Expected from Packer:
+#   K3S_VERSION   e.g. v1.31.4+k3s1
+#   STUDENT_IMAGE e.g. kubernetes-app/student:1
+#   FILES_DIR     directory with the uploaded files
 # -----------------------------------------------------------------------------
 
 : "${K3S_VERSION:?}"

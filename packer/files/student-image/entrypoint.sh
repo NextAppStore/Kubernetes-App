@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
-# Start eines Student-Pods: Benutzer anlegen, Passwort setzen, sshd starten.
+# Start of a student pod: create the user, set the password, start sshd.
 #
-# Erwartet:
-#   STUDENT_USER        Linux-Benutzername (Umgebungsvariable)
-#   /etc/student/password   Passwort (als Secret gemountet)
-#   /home/$STUDENT_USER     Home-Verzeichnis (als PVC gemountet)
+# Expects:
+#   STUDENT_USER        Linux username (environment variable)
+#   /etc/student/password   password (mounted as a secret)
+#   /home/$STUDENT_USER     home directory (mounted as a PVC)
 set -euo pipefail
 
 : "${STUDENT_USER:?STUDENT_USER muss gesetzt sein}"
@@ -19,22 +19,22 @@ if [ ! -s "${PASSWORD_FILE}" ]; then
     exit 1
 fi
 
-# Benutzer mit fester UID: Dateien im PVC gehoeren auch nach einem
-# Pod-Wechsel demselben Benutzer.
+# User with a fixed UID: files in the PVC keep belonging to the same user
+# even after a pod change.
 if ! id -u "${STUDENT_USER}" >/dev/null 2>&1; then
     useradd --uid "${STUDENT_UID}" --no-create-home --home-dir "${HOME_DIR}" \
         --shell /bin/bash --groups sudo --user-group "${STUDENT_USER}"
 fi
 
-# Das Passwort kommt immer aus dem Secret. Aenderungen mit `passwd` im Pod
-# gelten bis zum naechsten Pod-Start.
+# The password always comes from the secret. Changes made with `passwd` in the pod
+# last until the next pod start.
 printf '%s:%s\n' "${STUDENT_USER}" "$(cat "${PASSWORD_FILE}")" | chpasswd
 
 printf '%s ALL=(ALL) NOPASSWD:ALL\n' "${STUDENT_USER}" >/etc/sudoers.d/90-student
 chmod 0440 /etc/sudoers.d/90-student
 
-# Home beim ersten Start mit den Standarddateien befuellen. Danach nie wieder
-# anfassen, sonst wuerden Aenderungen der Studenten ueberschrieben.
+# Populate home with the default files on first start. Never touch it again
+# afterwards, otherwise the students' changes would be overwritten.
 mkdir -p "${HOME_DIR}"
 if [ ! -e "${HOME_DIR}/.lab-initialized" ]; then
     cp -a /etc/skel/. "${HOME_DIR}/"
@@ -43,8 +43,8 @@ if [ ! -e "${HOME_DIR}/.lab-initialized" ]; then
     chown "${STUDENT_UID}:${STUDENT_UID}" "${HOME_DIR}/.lab-initialized"
 fi
 
-# SSH-Hostkeys liegen im PVC: nach einem Reassign bleibt der Fingerprint gleich,
-# erst ein Reset erzeugt neue Keys.
+# SSH host keys live in the PVC: after a reassign the fingerprint stays the same,
+# only a reset generates new keys.
 mkdir -p "${HOSTKEY_DIR}"
 chmod 0700 "${HOSTKEY_DIR}"
 for type in ed25519 rsa; do

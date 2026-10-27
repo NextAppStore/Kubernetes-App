@@ -1,8 +1,8 @@
-# Student-Image: ein Ubuntu-24.04-System mit SSH-Zugang und sudo.
+# Student image: an Ubuntu 24.04 system with SSH access and sudo.
 #
-# Wird im Packer-Build gebaut und als Tar in k3s importiert (keine Registry).
-# Der Benutzer wird erst beim Start vom entrypoint.sh angelegt, damit ein Image
-# fuer alle Studenten reicht.
+# Built during the Packer build and imported into k3s as a tar (no registry).
+# The user is only created on start by entrypoint.sh, so that one image
+# is enough for all students.
 FROM ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
@@ -16,7 +16,7 @@ RUN apt-get update \
         iputils-ping dnsutils iproute2 net-tools \
     && locale-gen en_US.UTF-8 de_DE.UTF-8 \
     && mkdir -p /run/sshd \
-    # pam_loginuid schlaegt in Containern fehl und wuerde jeden Login abbrechen
+    # pam_loginuid fails in containers and would abort every login
     && sed -i 's/^session\s\+required\s\+pam_loginuid.so/session optional pam_loginuid.so/' /etc/pam.d/sshd \
     && rm -rf /var/lib/apt/lists/*
 
