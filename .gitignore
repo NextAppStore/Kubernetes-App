@@ -1,8 +1,6 @@
 # Terraform files
 .terraform/
 docs/
-tests/
-check.sh
 *.tfstate
 *.tfstate.*
 .terraform.lock.hcl
@@ -13,7 +11,7 @@ packer_cache/
 *.box
 *.pkrvars.hcl
 
-# Zugangsdaten: nie einchecken
+# Credentials: never commit
 *.kubeconfig
 clouds.yaml
 

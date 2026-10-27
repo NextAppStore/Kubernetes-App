@@ -1,9 +1,9 @@
 ############################
-# Plattform-injizierte Variablen (nicht im Wizard sichtbar)
+# Platform-injected variables (not shown in the wizard)
 ############################
 
 variable "users" {
-  description = "Per-team roster — vom Worker injiziert. @platform:internal"
+  description = "Per-team roster, injected by the worker. @platform:internal"
   type = map(list(object({
     email = string
   })))
@@ -11,99 +11,107 @@ variable "users" {
 }
 
 variable "image_name" {
-  description = "Glance-Image-Name — vom Worker zur Apply-Zeit gesetzt. @platform:internal"
+  description = "Glance image name, set by the worker at apply time. @platform:internal"
   type        = string
   default     = "kubernetes-app-vX"
 }
 
 ############################
-# Wizard-Variablen (vom Deployer im AppStore konfiguriert)
+# Wizard variables (configured by the deployer in the AppStore)
 ############################
 
 variable "network_uuid" {
-  description = "UUID des internen Netzwerks @openstack:network:id"
+  description = "UUID of the internal network @openstack:network:id"
   type        = string
-  # DHBWV6: dual-stack (v4+v6 auf demselben Subnetz-Paar) — jede VM
-  # bekommt automatisch beide Fixed-IPs von Neutron.
+  # DHBWV6: dual-stack (v4+v6 on the same subnet pair), every VM gets both
+  # fixed IPs from Neutron automatically.
   default = "9b579624-d844-4df3-b38d-89978b31d37d"
 }
 
 variable "shared_secgroup_id" {
-  description = "ID der gemeinsamen Security Group @openstack:security_group:id"
+  description = "ID of the shared security group @openstack:security_group:id"
   type        = string
   default     = "5c0e96fb-bd1f-41b3-b400-deccf7712a80"
 }
 
-variable "flavor_name" {
-  description = "Groesse der VM. Alle Student-Pods laufen darauf: ca. 1 GiB RAM pro Student plus 2 GiB. @openstack:flavor:name"
-  type        = string
-  default     = "gp1.large"
-}
-
 variable "key_pair_name" {
-  description = "Optionales Keypair fuer SSH-Admin-Zugang zur VM (Benutzer ubuntu). Leer = kein Admin-Zugang. @openstack:keypair:name"
+  description = "Optional key pair for SSH admin access to the VM (user ubuntu). Empty = no admin access. @openstack:keypair:name"
   type        = string
   default     = ""
 }
 
+############################
+# Resources of the whole VM
+############################
+
+variable "flavor_name" {
+  description = "Size of the VM (vCPU and RAM for all student pods together). The deploy is rejected if the students do not fit. @openstack:flavor:name"
+  type        = string
+  default     = "gp1.large"
+}
+
 variable "root_disk_gb" {
-  description = "Groesse der Root-Platte in GB (Boot from Volume). 0 = Platte des Flavors. Dort liegen auch die Home-Verzeichnisse aller Studenten."
+  description = "Disk of the VM in GB (boot from volume). 0 = disk of the flavor, usually too small (gp1.large: 10 GB). The home directories of all students live here."
   type        = number
-  default     = 0
-}
-
-variable "allowed_cidr_v4" {
-  description = "IPv4-Netz, das SSH (Pods, VM) und die Kubernetes-API erreichen darf. Default: DHBW-Campus und VPN."
-  type        = string
-  default     = "141.72.0.0/16"
+  # 40 GB on gp1.large: 10 GB system + 6 homes of 5 GB, matching the 6 pods
+  # that fit into its RAM with the pod defaults.
+  default = 40
 
   validation {
-    condition     = can(cidrhost(var.allowed_cidr_v4, 0)) && var.allowed_cidr_v4 != "0.0.0.0/0"
-    error_message = "allowed_cidr_v4 muss ein gueltiges IPv4-Netz sein und darf nicht 0.0.0.0/0 sein."
+    condition     = var.root_disk_gb >= 0 && floor(var.root_disk_gb) == var.root_disk_gb
+    error_message = "root_disk_gb must be a whole number >= 0."
   }
 }
 
-variable "allowed_cidr_v6" {
-  description = "IPv6-Netz, das SSH (Pods, VM) und die Kubernetes-API erreichen darf. Praefix des DHBW-Netzes, bitte pruefen."
-  type        = string
-  default     = "2001:7c0::/32"
+############################
+# Resources per student pod (request = limit, guaranteed)
+############################
+
+variable "pod_cpu" {
+  description = "vCPUs per student pod, e.g. 0.5 or 1. Reserved for the pod, so the VM must have enough for all students."
+  type        = number
+  default     = 0.5
 
   validation {
-    condition     = can(cidrhost(var.allowed_cidr_v6, 0)) && !contains(["::/0", "0::/0"], var.allowed_cidr_v6)
-    error_message = "allowed_cidr_v6 muss ein gueltiges IPv6-Netz sein und darf nicht ::/0 sein."
+    condition     = var.pod_cpu >= 0.1
+    error_message = "pod_cpu must be at least 0.1."
   }
 }
+
+variable "pod_memory_mb" {
+  description = "RAM per student pod in MB. Reserved for the pod, so the VM must have enough for all students."
+  type        = number
+  default     = 1024
+
+  validation {
+    condition     = var.pod_memory_mb >= 256 && floor(var.pod_memory_mb) == var.pod_memory_mb
+    error_message = "pod_memory_mb must be a whole number >= 256."
+  }
+}
+
+variable "pod_disk_gb" {
+  description = "Size of the home directory per student in GB. Counted against the VM disk; local-path does not enforce it inside the pod."
+  type        = number
+  default     = 5
+
+  validation {
+    condition     = var.pod_disk_gb >= 1 && floor(var.pod_disk_gb) == var.pod_disk_gb
+    error_message = "pod_disk_gb must be a whole number >= 1."
+  }
+}
+
+############################
+# Network of the student pods
+############################
 
 variable "allow_pod_communication" {
-  description = "Pentest-Modus: Die Student-Pods eines Teams erreichen sich gegenseitig auf allen Ports. Die Pods erreichen dann das DHBW-/OpenStack-Netz (allowed_cidr_v4/v6) nicht mehr. Spaeter umschaltbar mit `labctl network open|isolated`."
+  description = "Student pods of a team reach each other on all ports (e.g. for pentesting). Can be switched later with `labctl network peers on|off`."
   type        = bool
   default     = false
 }
 
-############################
-# Pod-Ressourcen je Student
-############################
-
-variable "pod_cpu_limit" {
-  description = "CPU-Limit je Student-Pod (Kerne)."
-  type        = string
-  default     = "1"
-}
-
-variable "pod_memory_limit" {
-  description = "RAM-Limit je Student-Pod."
-  type        = string
-  default     = "1Gi"
-}
-
-variable "pod_memory_request" {
-  description = "Reservierter RAM je Student-Pod (fuer die Platzierung). Niedriger als das Limit erlaubt mehr Studenten pro VM."
-  type        = string
-  default     = "256Mi"
-}
-
-variable "pod_disk" {
-  description = "Groesse des Home-Verzeichnisses je Student. local-path erzwingt die Groesse nicht."
-  type        = string
-  default     = "5Gi"
+variable "allow_internet" {
+  description = "Student pods reach the internet (apt, pip, git). The campus/OpenStack network, the VM, the Kubernetes API and the metadata service stay blocked in any case. Can be switched later with `labctl network internet on|off`."
+  type        = bool
+  default     = true
 }

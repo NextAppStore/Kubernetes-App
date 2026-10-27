@@ -15,12 +15,26 @@ inside it. The platform obligations (variables `users`/`image_name`, outputs
 * **Logic lives in the image, data lives in cloud-init.** Scripts (`labctl`, provisioning) live
   under `packer/files/` and are installed into the image. `user-data.yaml.tpl` holds only
   configuration.
-* **Students must never reach the metadata service, the API, or the node.** Other pods are blocked
-  unless pentest mode is on (namespace label `kubernetes-app/peer-access=open`, initial value from
-  `allow_pod_communication`). Then the additive policy `student-peer-access` opens student↔student
-  traffic only, and `student-isolation` additionally blocks the campus/OpenStack networks so attacks
-  cannot leave the team's pods. The namespace label, not `lab.env`, is the source of truth after
-  first boot. Any change to these policies must be covered in `tests/labctl.sh`.
+* **Students must never reach the metadata service, the API, the node, or the campus/OpenStack
+  network** (`local.campus_cidr_v4/v6`, also the security group source). This holds in every mode.
+  Two namespace labels switch the rest, initial values from `allow_pod_communication` /
+  `allow_internet`:
+  * `kubernetes-app/peer-access=open|isolated`: the additive policy `student-peer-access` opens
+    student↔student traffic only.
+  * `kubernetes-app/internet=allowed|blocked`: `student-isolation` has an `ipBlock` egress rule
+    (with all the blocks above in `except`) only when allowed; otherwise egress is DNS only.
+
+  The namespace labels, not `lab.env`, are the source of truth after first boot. Any change to these
+  policies must be covered in `tests/labctl.sh`.
+* **Ports are never reassigned.** `terraform_data.port_registry` (`ignore_changes = [input]`) keeps
+  the first-seen order per team; new students are appended. Never sort ports by the current roster.
+* **Resources are guaranteed** (request = limit, `pod_cpu`/`pod_memory_mb`/`pod_disk_gb`).
+  `local.reserved` must match the `kube-reserved`/`system-reserved` kubelet args in
+  `user-data.yaml.tpl`; the capacity precondition on the VM uses `modules/capacity`.
+* **Readiness contract.** The first-boot script must end with exactly one serial-console line
+  `APPSTORE-READY` or `APPSTORE-FAILED: <reason>`. The output `readiness_checks` tells the worker
+  which instances to poll; its `timeout_seconds` must stay above the sum of the waits in
+  `kubernetes-app-provision.sh`.
 * **Usernames are DNS labels** (`^[a-z]([a-z0-9-]{0,28}[a-z0-9])?$`) and must match between
   `main.tf` and `labctl`.
 * `LAB_IMAGE` (`labctl`, `main.tf`) and `student_image` (Packer) must use the same name and tag.
@@ -66,8 +80,12 @@ side — this section is the context needed to plan that work; it does not presc
 * `labctl`'s commands and their effect on cluster state (see `README.md` and the script itself):
   `list`, `reassign <user>` (new pod, same home dir, same port), `reset <user> [--new-password]`
   (new pod, home dir wiped), `passwd <user> [password]`, `add-student <user> [password] [port]`,
-  `remove-student <user> [--yes]`, `sync`, `shell <user>`, `logs <user>`. `reassign`/`reset` wait
-  for rollout (up to 180s) before returning.
+  `remove-student <user> [--yes]`, `sync`, `wait-ready [--timeout <s>]`,
+  `network peers|internet <on|off>`, `network status`, `shell <user>`, `logs <user>`.
+  `reassign`/`reset` wait for rollout (up to 180s) before returning.
+* `labctl` is planned to move to the backend (its own Kubernetes client against the kubeconfig
+  output). Until then it stays in the image; keep all state in the cluster (objects and namespace
+  labels) so a backend implementation can take over without migrating anything.
 
 **Security-relevant facts to design around:**
 

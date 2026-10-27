@@ -6,25 +6,25 @@
 # "<team>-<username>": {
 #   type        = "password"
 #   ip          = "141.72.x.y"        # IPv4
-#   ip_v6       = "2001:7c0:..."      # IPv6 (Hauptadresse)
-#   port        = 30001               # NodePort des Student-Pods
+#   ip_v6       = "2001:7c0:..."      # IPv6 (main address)
+#   port        = 30001               # NodePort of the student pod, stable
 #   username    = "anna"
-#   auth        = "<passwort>"
+#   auth        = "<password>"
 #   ssh_command = "ssh -p 30001 anna@2001:7c0:..."
 # }
 
 output "user_accounts" {
-  description = "User accounts mit Zugangsdaten fuer jeden Studenten"
+  description = "User accounts with credentials for every student"
   value       = local.user_accounts
   sensitive   = true
 }
 
 ############################
-# Team-VM Details
+# Team VM details
 ############################
 
 output "team_vms" {
-  description = "Details aller Team-VMs (je Team ein k3s-Cluster)"
+  description = "Details of all team VMs (one k3s cluster per team)"
   value = {
     for team in local.teams_list : team => {
       instance_id   = openstack_compute_instance_v2.team_vm[team].id
@@ -32,8 +32,8 @@ output "team_vms" {
       fixed_ip      = local.fixed_ip_v4[team]
       fixed_ip_v6   = local.fixed_ip_v6[team]
       floating_ip   = null
-      # Die API-Adresse dient als Link; die SSH-Befehle stehen je Student in
-      # user_accounts.
+      # The API address serves as the link; the SSH commands are listed per
+      # student in user_accounts.
       url          = local.api_endpoint[team]
       api_endpoint = local.api_endpoint[team]
       ssh_command  = var.key_pair_name != "" ? "ssh ubuntu@${local.primary_ip[team]}" : null
@@ -42,20 +42,41 @@ output "team_vms" {
 }
 
 output "teams_summary" {
-  description = "Uebersicht: Teams und Anzahl Studenten"
+  description = "Overview: teams and number of students"
   value = {
     for team in local.teams_list : team => length(local.team_user_ids[team])
   }
 }
 
 ############################
-# Kubeconfig fuer Dozenten
+# Readiness (evaluated by the worker after apply)
 ############################
 
-# Admin-Zugang (cluster-admin) je Team. Speichern mit:
+# The first-boot script writes "APPSTORE-READY" or "APPSTORE-FAILED: <reason>"
+# to the serial console once all student pods run (or fail). The worker polls
+# the console log of every instance and fails the deploy on FAILED/timeout.
+# The timeout covers the boot, the IPv6 wait (up to 4 min), the k3s start
+# (up to 8 min) and the pods (7 min, PODS_TIMEOUT in the first-boot script),
+# with some margin so the VM reports its own reason first.
+output "readiness_checks" {
+  description = "Instances the worker waits for after apply (APPSTORE-READY marker on the serial console)"
+  value = [
+    for team in local.teams_list : {
+      instance_id     = openstack_compute_instance_v2.team_vm[team].id
+      name            = team
+      timeout_seconds = 1500
+    }
+  ]
+}
+
+############################
+# Kubeconfig for teachers
+############################
+
+# Admin access (cluster-admin) per team. Save with:
 #   terraform output -json kubeconfigs | jq -r '.["<team>"]' > kurs.kubeconfig
 output "kubeconfigs" {
-  description = "Kubeconfig mit Admin-Rechten je Team (nur fuer Dozenten)"
+  description = "Kubeconfig with admin rights per team (teachers only)"
   value       = local.kubeconfigs
   sensitive   = true
 }

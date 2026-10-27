@@ -1,5 +1,5 @@
 ############################
-# PLATFORM-Variablen (vom AppStore gesetzt)
+# PLATFORM variables (set by the AppStore)
 ############################
 
 variable "image_name" {
@@ -21,7 +21,7 @@ variable "security_groups" {
 }
 
 ############################
-# APP-Variablen
+# APP variables
 ############################
 
 variable "k3s_version" {

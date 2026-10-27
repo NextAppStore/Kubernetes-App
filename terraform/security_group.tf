@@ -1,22 +1,22 @@
-# Security group fuer SSH, Kubernetes-API und die Student-Pods.
+# Security group for SSH, the Kubernetes API and the student pods.
 #
-# Die gemeinsame Gruppe der Plattform (``shared_secgroup_id``) oeffnet nur 22,
-# 80 und 443. Die NodePorts der Student-Pods (30000-32767) und die API (6443)
-# gehoeren zu dieser App und stehen deshalb in einer eigenen Gruppe.
+# The platform's shared group (``shared_secgroup_id``) only opens 22, 80 and
+# 443. The NodePorts of the student pods (30000-32767) and the API (6443)
+# belong to this app and therefore live in their own group.
 #
-# Security-Group-Regeln gelten je Ethertype. Jede Freigabe braucht deshalb eine
-# IPv4- und eine IPv6-Regel, sonst waere die VM ueber IPv6 unerreichbar.
+# Security group rules apply per ethertype. Every rule therefore needs an
+# IPv4 and an IPv6 variant, otherwise the VM would be unreachable over IPv6.
 
 locals {
   sg_ports = {
-    ssh  = { min = 22, max = 22, description = "SSH auf der VM" }
-    api  = { min = 6443, max = 6443, description = "Kubernetes-API" }
-    pods = { min = 30000, max = 32767, description = "SSH der Student-Pods (NodePort)" }
+    ssh  = { min = 22, max = 22, description = "SSH to the VM" }
+    api  = { min = 6443, max = 6443, description = "Kubernetes API" }
+    pods = { min = 30000, max = 32767, description = "SSH of the student pods (NodePort)" }
   }
 
   sg_families = {
-    v4 = { ethertype = "IPv4", cidr = var.allowed_cidr_v4 }
-    v6 = { ethertype = "IPv6", cidr = var.allowed_cidr_v6 }
+    v4 = { ethertype = "IPv4", cidr = local.campus_cidr_v4 }
+    v6 = { ethertype = "IPv6", cidr = local.campus_cidr_v6 }
   }
 
   sg_rules = merge([
@@ -37,15 +37,15 @@ resource "random_id" "secgroup" {
 }
 
 resource "openstack_networking_secgroup_v2" "lab" {
-  # Neutron verlangt keine eindeutigen Namen. Das Suffix haelt mehrere
-  # Deployments dieser App im Dashboard auseinander.
+  # Neutron does not require unique names. The suffix keeps several
+  # deployments of this app apart in the dashboard.
   name        = "${local.app_name}-${random_id.secgroup.hex}"
-  description = "SSH, Kubernetes-API und Student-Pods"
+  description = "SSH, Kubernetes API and student pods"
 }
 
-# tfsec kann die Quell-Netze aus den Variablen nicht aufloesen und meldet
-# deshalb "public ingress". Die Netze sind auf das Campus-/VPN-Netz beschraenkt
-# und die Variablen verbieten 0.0.0.0/0 und ::/0 (siehe variables.tf).
+# The source networks are the campus/VPN constants from main.tf
+# (local.campus_cidr_v4/v6), never 0.0.0.0/0 or ::/0. tfsec cannot resolve
+# them and would report "public ingress".
 #tfsec:ignore:openstack-networking-no-public-ingress
 resource "openstack_networking_secgroup_rule_v2" "lab" {
   for_each = local.sg_rules
