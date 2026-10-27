@@ -46,6 +46,13 @@ run "initial_ports" {
     condition     = length(output.readiness_checks) == 1 && output.readiness_checks[0].name == "kurs"
     error_message = "readiness_checks must list one instance per team."
   }
+
+  # The frontend shows the SSH command only for authtype "ssh" and only
+  # when the team VM has no url.
+  assert {
+    condition     = local.user_accounts["kurs-ben"].authtype == "ssh" && !contains(keys(output.team_vms["kurs"]), "url")
+    error_message = "user_accounts must set authtype = \"ssh\" and team_vms must not set url."
+  }
 }
 
 run "new_student_is_appended" {

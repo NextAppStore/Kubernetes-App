@@ -5,6 +5,7 @@
 # Schema user_accounts:
 # "<team>-<username>": {
 #   type        = "password"
+#   authtype    = "ssh"               # frontend shows an SSH command, not a URL
 #   ip          = "141.72.x.y"        # IPv4
 #   ip_v6       = "2001:7c0:..."      # IPv6 (main address)
 #   port        = 30001               # NodePort of the student pod, stable
@@ -32,9 +33,9 @@ output "team_vms" {
       fixed_ip      = local.fixed_ip_v4[team]
       fixed_ip_v6   = local.fixed_ip_v6[team]
       floating_ip   = null
-      # The API address serves as the link; the SSH commands are listed per
-      # student in user_accounts.
-      url          = local.api_endpoint[team]
+      # No `url`: the frontend would show it instead of the per-student SSH
+      # command from user_accounts. The API is only for the teacher, who
+      # gets it via the kubeconfigs output.
       api_endpoint = local.api_endpoint[team]
       ssh_command  = var.key_pair_name != "" ? "ssh ubuntu@${local.primary_ip[team]}" : null
     }

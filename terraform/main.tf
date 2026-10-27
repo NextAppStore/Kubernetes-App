@@ -349,6 +349,7 @@ locals {
   user_accounts = {
     for uid, user in local.users_map : uid => {
       type        = "password"
+      authtype    = "ssh"
       ip          = local.fixed_ip_v4[user.team]
       ip_v6       = local.fixed_ip_v6[user.team]
       port        = local.user_ports[uid]
